@@ -4,10 +4,14 @@ import requests
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
+from google import genai
 
-BASEROW_TOKEN = os.getenv("BASEROW_TOKEN")
+BASEROW_TOKEN = os.getenv("BASEROW_TOKEN", "").strip()
 TABLE_ID = "1197631"  # mai_istihbarat
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+
+# Gemini istemcisini başlat
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 BASE_URL = "https://www.insaatyatirim.com"
 SOURCE_URL = "https://www.insaatyatirim.com/Haberler/yatirim-haberleri/13"
@@ -68,7 +72,7 @@ def scrape_with_browser(existing_links):
         
         try:
             page.goto(SOURCE_URL, wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(3000)  # JS korumasının geçmesi için bekle
+            page.wait_for_timeout(3000)
             html_content = page.content()
         except Exception as e:
             print(f"[-] Sayfa yükleme hatası: {e}")
@@ -111,7 +115,6 @@ def scrape_with_browser(existing_links):
 
                 seen.add(full_url)
                 
-                # Haber detayına tarayıcıyla girip metni çek
                 detail_text = title
                 try:
                     detail_page = context.new_page()
@@ -163,12 +166,12 @@ SADECE aşağıdaki JSON formatında yanıt ver (Markdown tırnakları ```json K
 Haber Başlığı: {title}
 Haber Detayı: {full_text}
 """
-    api_url = f"[https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=](https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=){GEMINI_API_KEY}"
-    payload = {"contents": [{"parts": [{"text": prompt}]}]}
-
     try:
-        res = requests.post(api_url, json=payload, headers={"Content-Type": "application/json"}, timeout=25)
-        raw = res.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        response = ai_client.models.generate_content(
+            model='gemini-2.5-flash',
+            contents=prompt
+        )
+        raw = response.text.strip()
         
         if "ILGISIZ" in raw:
             print(f"[-] Sektör dışı haber elendi: {title[:40]}...")
