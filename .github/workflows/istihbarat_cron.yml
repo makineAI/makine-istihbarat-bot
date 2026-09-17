@@ -19,7 +19,7 @@ jobs:
 
       - name: Paketleri ve Chromium Kur
         run: |
-          pip install requests beautifulsoup4 playwright
+          pip install requests beautifulsoup4 playwright google-genai
           playwright install --with-deps chromium
 
       - name: Botu Calistir
