@@ -1,4 +1,4 @@
-# LİNKLERİN KOPYALARKEN BOZULMASINI ENGELLEYEN YAPIimport os
+import os
 import json
 import requests
 from urllib.parse import quote, urlparse
@@ -63,7 +63,6 @@ def archive_old_records():
                     try:
                         if datetime.strptime(t_str, "%Y-%m-%d") < cutoff:
                             patch_url = f"{API_URL}/{TABLE_ID}/{row['id']}/?user_field_names=true"
-                            # 30 günü geçenleri otomatik "Sonuçlandı (Kapandı)" durumuna al
                             requests.patch(patch_url, headers=headers, json={"Durum": "Sonuçlandı (Kapandı)"})
                             print(f"[!] Fırsat ID {row['id']} zaman aşımından kapatıldı.")
                     except ValueError:
