@@ -1,6 +1,7 @@
 import os
 import json
 import requests
+from urllib.parse import quote, urlparse
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
 from playwright.sync_api import sync_playwright
@@ -16,6 +17,18 @@ BASE_URL = "https://www.insaatyatirim.com"
 SOURCE_URL = "https://www.insaatyatirim.com/Haberler/yatirim-haberleri/13"
 
 NEGATIF_KELIMELER = ["konut", "villa", "daire", "rezidans", "otel", "turizm", "kira", "imar"]
+
+def sanitize_url(raw_url):
+    """URL içindeki Türkçe karakterleri encode ederek Baserow validasyonunu garantiye alır."""
+    try:
+        raw_url = raw_url.strip()
+        if not raw_url.startswith("http"):
+            raw_url = f"{BASE_URL}/{raw_url.lstrip('/')}"
+        parsed = urlparse(raw_url)
+        safe_path = quote(parsed.path)
+        return f"{parsed.scheme}://{parsed.netloc}{safe_path}"
+    except Exception:
+        return raw_url
 
 def get_existing_links():
     existing = set()
@@ -107,12 +120,15 @@ def scrape_with_browser(existing_links):
             if not news_date:
                 news_date = datetime.now().strftime("%Y-%m-%d")
 
-            if full_url not in existing_links and full_url not in seen:
+            # sanitize_url ile Baserow'daki kayıtlı linklerle tam örtüşmesini sağla
+            safe_url = sanitize_url(full_url)
+
+            if safe_url not in existing_links and safe_url not in seen:
                 title_lower = title.lower()
                 if any(neg in title_lower for neg in NEGATIF_KELIMELER):
                     continue
 
-                seen.add(full_url)
+                seen.add(safe_url)
                 
                 detail_text = title
                 try:
@@ -128,7 +144,7 @@ def scrape_with_browser(existing_links):
 
                 items.append({
                     "title": title,
-                    "url": full_url,
+                    "url": safe_url,
                     "date": news_date,
                     "detail_text": detail_text
                 })
@@ -140,29 +156,25 @@ def scrape_with_browser(existing_links):
 
 def analyze_with_gemini(title, full_text):
     prompt = f"""
-Sen iş makineleri (ekskavatör, loder, beko loder vb.) ve istif makineleri (forklift, reach truck, akülü transpalet vb.) sektöründe uzman bir satış istihbaratçısısın.
+Sen iş makineleri ve istif makineleri sektöründe uzman bir satış istihbaratçısısın.
 
 GÖREVİN:
-Aşağıdaki haberi incele. Bu haber DOĞRUDAN aşağıdaki iki sektörden birine makine satışı veya kiralaması fırsatı yaratıyor mu?
-1. İŞ MAKİNESİ: Ağır sanayi, altyapı, maden, büyük fabrika kaba inşaatı, hafriyat, liman vb.
-2. İSTİF MAKİNESİ: Lojistik depo, antrepo, fabrika içi üretim tesisi, soğuk hava deposu, dağıtım merkezi vb.
+Aşağıdaki haberi incele. Bu haber DOĞRUDAN makine satışı/kiralaması fırsatı yaratıyor mu?
+- İŞ MAKİNESİ: Ağır sanayi, maden, altyapı, büyük fabrika kaba inşaatı, hafriyat vb.
+- İSTİF MAKİNESİ: Depo, antrepo, fabrika içi lojistik, soğuk hava deposu, dağıtım merkezi vb.
 
-EĞER bu iki sektörle HİÇBİR İLGİSİ YOKSA:
-SADECE "ILGISIZ" yaz.
+İlgisizse SADECE "ILGISIZ" yaz.
 
-EĞER UYGUNSA:
-SADECE aşağıdaki JSON formatında yanıt ver (Markdown tırnakları ```json KULLANMA):
+Uygunsa SADECE aşağıdaki JSON formatında yanıt ver:
 {{
-  "İstihbarat_Basligi": "Net, profesyonel başlık",
+  "İstihbarat_Basligi": "Net profesyonel başlık",
   "Hedef_Firma": "Yatırım yapan ana firma adı (Bulunamazsa 'Bilinmiyor')",
   "İstihbarat_Turu": "Yeni Yatırım / Tesis",
-  "İlgili_Sektor": "İstif Makinesi VEYA İş Makinesi",
-  "Potansiyel_İhtiyac": "Düşük (1-2 Makine) VEYA Orta (3-10 Makine) VEYA Yüksek (10+ Makine)",
+  "Sektor": "İstif Makinesi veya İş Makinesi",
+  "Potansiyel_İhtiyac": "Düşük (1-2 Makine) veya Orta (3-10 Makine) veya Yüksek (10+ Makine)",
   "Sehir_Bolge": "İl / İlçe veya Bölge",
   "İstihbarat_Detayı": "Tahmini makine modelleri ve satış ekibi için kısa aksiyon tavsiyesi."
 }}
-
-DİKKAT: İlgili_Sektor alanı için SADECE 'İş Makinesi' veya 'İstif Makinesi' yaz (baş harfleri büyük).
 
 Haber Başlığı: {title}
 Haber Detayı: {full_text}
@@ -182,10 +194,10 @@ Haber Detayı: {full_text}
             raw = raw.strip("`").replace("json", "").strip()
             
         data = json.loads(raw)
-
-        # Baserow Select seçenekleri için kesin formatlama düzeltmesi
-        sektor_raw = data.get("İlgili_Sektor", "").lower()
-        if "istif" in sektor_raw:
+        
+        # Kesin kural: Sadece bu iki ifadeden biri gidecek
+        sektor_metin = str(data.get("Sektor", "")).lower()
+        if "istif" in sektor_metin:
             data["İlgili_Sektor"] = "İstif Makinesi"
         else:
             data["İlgili_Sektor"] = "İş Makinesi"
@@ -196,14 +208,9 @@ Haber Detayı: {full_text}
         return None
 
 def save_to_baserow(data, source_url, news_date):
-    url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/?user_field_names=true"
+    url = f"[https://api.baserow.io/api/database/rows/table/](https://api.baserow.io/api/database/rows/table/){TABLE_ID}/?user_field_names=true"
     headers = {"Authorization": f"Token {BASEROW_TOKEN}", "Content-Type": "application/json"}
     
-    # URL'in geçerli olduğundan emin ol
-    clean_url = source_url.strip()
-    if not clean_url.startswith("http"):
-        clean_url = f"{BASE_URL}/{clean_url.lstrip('/')}"
-
     payload = {
         "İstihbarat_Basligi": data.get("İstihbarat_Basligi"),
         "Hedef_Firma": data.get("Hedef_Firma"),
@@ -213,7 +220,7 @@ def save_to_baserow(data, source_url, news_date):
         "Sehir_Bolge": data.get("Sehir_Bolge"),
         "İstihbarat_Detayı": data.get("İstihbarat_Detayı"),
         "Tarih": news_date,
-        "Kaynak_Haber_Linki": clean_url,
+        "Kaynak_Haber_Linki": source_url,
         "Durum": "Aktif Fırsat"
     }
     
