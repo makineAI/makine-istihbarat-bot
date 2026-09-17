@@ -9,15 +9,27 @@ TABLE_ID = "1197631"  # mai_istihbarat
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 BASE_URL = "https://www.insaatyatirim.com"
-# SADECE 1. SAYFA
 SOURCE_URL = "https://www.insaatyatirim.com/Haberler/yatirim-haberleri/13"
 
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+# Gerçek Chrome tarayıcısı kimliği
+BROWSER_HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+    "Accept-Language": "tr-TR,tr;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Dest": "document",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-Site": "none",
+    "Sec-Fetch-User": "?1",
+    "Cache-Control": "max-age=0"
 }
 
-# Python tarafında doğrudan elenecek alakasız kelimeler
 NEGATIF_KELIMELER = ["konut", "villa", "daire", "rezidans", "otel", "turizm", "kira", "imar"]
+
+session = requests.Session()
+session.headers.update(BROWSER_HEADERS)
 
 def get_existing_links():
     existing = set()
@@ -61,7 +73,16 @@ def archive_old_records():
 
 def scrape_page_one(existing_links):
     print(f"[*] Sadece 1. sayfa taranıyor: {SOURCE_URL}")
-    r = requests.get(SOURCE_URL, headers=HEADERS, timeout=15)
+    
+    # Ana sayfaya uğrayıp çerez alarak yapay zeka/bot korumasını aş
+    try:
+        session.get(BASE_URL, timeout=10)
+    except Exception:
+        pass
+
+    session.headers.update({"Referer": BASE_URL})
+    r = session.get(SOURCE_URL, timeout=15)
+    
     if r.status_code != 200:
         print(f"[-] Sayfa açılamadı: {r.status_code}")
         return []
@@ -77,9 +98,7 @@ def scrape_page_one(existing_links):
             full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
             title = a.get_text(strip=True)
             
-            # Başlık filtresi
             if len(title) > 25 and full_url not in existing_links and full_url not in seen:
-                # Alakasız konut/villa haberlerini baştan ele
                 title_lower = title.lower()
                 if any(neg in title_lower for neg in NEGATIF_KELIMELER):
                     continue
@@ -93,7 +112,7 @@ def scrape_page_one(existing_links):
 def analyze_with_gemini(title, url):
     full_text = title
     try:
-        detay_r = requests.get(url, headers=HEADERS, timeout=10)
+        detay_r = session.get(url, timeout=10)
         if detay_r.status_code == 200:
             dsoup = BeautifulSoup(detay_r.text, "html.parser")
             paragraphs = [p.get_text(strip=True) for p in dsoup.find_all("p") if len(p.get_text(strip=True)) > 40]
