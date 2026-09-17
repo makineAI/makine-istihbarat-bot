@@ -1,9 +1,9 @@
 import os
 import json
 import requests
-import cloudscraper
 from bs4 import BeautifulSoup
 from datetime import datetime, timedelta
+from playwright.sync_api import sync_playwright
 
 BASEROW_TOKEN = os.getenv("BASEROW_TOKEN")
 TABLE_ID = "1197631"  # mai_istihbarat
@@ -11,15 +11,6 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
 BASE_URL = "https://www.insaatyatirim.com"
 SOURCE_URL = "https://www.insaatyatirim.com/Haberler/yatirim-haberleri/13"
-
-# WAF ve Cloudflare engelini aşan scraper
-scraper = cloudscraper.create_scraper(
-    browser={
-        'browser': 'chrome',
-        'platform': 'windows',
-        'desktop': True
-    }
-)
 
 NEGATIF_KELIMELER = ["konut", "villa", "daire", "rezidans", "otel", "turizm", "kira", "imar"]
 
@@ -63,76 +54,89 @@ def archive_old_records():
     except Exception as e:
         print(f"[-] Arşivleme hatası: {e}")
 
-def scrape_page_one(existing_links):
-    print(f"[*] 1. sayfa taranıyor: {SOURCE_URL}")
-    r = scraper.get(SOURCE_URL, timeout=20)
-    
-    if r.status_code != 200:
-        print(f"[-] Sayfa açılamadı: {r.status_code}")
-        return []
-
-    soup = BeautifulSoup(r.text, "html.parser")
-    # Paylaştığın HTML bloğundaki haber kartları
-    cards = soup.find_all("div", class_="trending-news-item")
+def scrape_with_browser(existing_links):
+    print(f"[*] Gerçek Chromium başlatılıyor: {SOURCE_URL}")
     items = []
-    seen = set()
-
-    for card in cards:
-        title_el = card.find("h3", class_="title")
-        if not title_el:
-            continue
+    
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            locale="tr-TR"
+        )
+        page = context.new_page()
         
-        a_tag = title_el.find("a", href=True)
-        if not a_tag:
-            continue
+        try:
+            page.goto(SOURCE_URL, wait_until="domcontentloaded", timeout=45000)
+            page.wait_for_timeout(3000)  # JS korumasının geçmesi için bekle
+            html_content = page.content()
+        except Exception as e:
+            print(f"[-] Sayfa yükleme hatası: {e}")
+            browser.close()
+            return []
 
-        href = a_tag["href"]
-        full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
-        title = a_tag.get_text(strip=True)
+        soup = BeautifulSoup(html_content, "html.parser")
+        cards = soup.find_all("div", class_="trending-news-item")
+        seen = set()
 
-        # Tarih bilgisini al (örn: 16.09.2026)
-        date_el = card.find("div", class_="meta-date")
-        news_date = None
-        if date_el and date_el.find("span"):
-            raw_date = date_el.find("span").get_text(strip=True)
-            try:
-                # GG.AA.YYYY -> YYYY-MM-DD formatına çevir
-                news_date = datetime.strptime(raw_date, "%d.%m.%Y").strftime("%Y-%m-%d")
-            except Exception:
-                news_date = datetime.now().strftime("%Y-%m-%d")
-
-        if not news_date:
-            news_date = datetime.now().strftime("%Y-%m-%d")
-
-        # Filtreleme ve tekillik kontrolü
-        if full_url not in existing_links and full_url not in seen:
-            title_lower = title.lower()
-            if any(neg in title_lower for neg in NEGATIF_KELIMELER):
+        for card in cards:
+            title_el = card.find("h3", class_="title")
+            if not title_el:
+                continue
+            
+            a_tag = title_el.find("a", href=True)
+            if not a_tag:
                 continue
 
-            seen.add(full_url)
-            items.append({
-                "title": title,
-                "url": full_url,
-                "date": news_date
-            })
+            href = a_tag["href"]
+            full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
+            title = a_tag.get_text(strip=True)
 
-    print(f"[+] 1. sayfada hedefe uygun {len(items)} adet aday haber tespit edildi.")
+            date_el = card.find("div", class_="meta-date")
+            news_date = None
+            if date_el and date_el.find("span"):
+                raw_date = date_el.find("span").get_text(strip=True)
+                try:
+                    news_date = datetime.strptime(raw_date, "%d.%m.%Y").strftime("%Y-%m-%d")
+                except Exception:
+                    news_date = datetime.now().strftime("%Y-%m-%d")
+
+            if not news_date:
+                news_date = datetime.now().strftime("%Y-%m-%d")
+
+            if full_url not in existing_links and full_url not in seen:
+                title_lower = title.lower()
+                if any(neg in title_lower for neg in NEGATIF_KELIMELER):
+                    continue
+
+                seen.add(full_url)
+                
+                # Haber detayına tarayıcıyla girip metni çek
+                detail_text = title
+                try:
+                    detail_page = context.new_page()
+                    detail_page.goto(full_url, wait_until="domcontentloaded", timeout=25000)
+                    detail_soup = BeautifulSoup(detail_page.content(), "html.parser")
+                    paragraphs = [p.get_text(strip=True) for p in detail_soup.find_all("p") if len(p.get_text(strip=True)) > 40]
+                    if paragraphs:
+                        detail_text = " ".join(paragraphs[:3])
+                    detail_page.close()
+                except Exception:
+                    pass
+
+                items.append({
+                    "title": title,
+                    "url": full_url,
+                    "date": news_date,
+                    "detail_text": detail_text
+                })
+
+        browser.close()
+
+    print(f"[+] 1. sayfada hedefe uygun {len(items)} adet aday haber çekildi.")
     return items
 
-def analyze_with_gemini(title, url):
-    full_text = title
-    try:
-        # Haber detay sayfasına gir
-        detay_r = scraper.get(url, timeout=15)
-        if detay_r.status_code == 200:
-            dsoup = BeautifulSoup(detay_r.text, "html.parser")
-            paragraphs = [p.get_text(strip=True) for p in dsoup.find_all("p") if len(p.get_text(strip=True)) > 40]
-            if paragraphs:
-                full_text = " ".join(paragraphs[:3])
-    except Exception as e:
-        print(f"[-] Detay sayfasına girerken hata: {e}")
-
+def analyze_with_gemini(title, full_text):
     prompt = f"""
 Sen iş makineleri (ekskavatör, loder, beko loder vb.) ve istif makineleri (forklift, reach truck, akülü transpalet vb.) sektöründe uzman bir satış istihbaratçısısın.
 
@@ -202,10 +206,10 @@ def save_to_baserow(data, source_url, news_date):
 def main():
     archive_old_records()
     existing = get_existing_links()
-    news = scrape_page_one(existing)
+    news = scrape_with_browser(existing)
     
     for n in news:
-        intel = analyze_with_gemini(n["title"], n["url"])
+        intel = analyze_with_gemini(n["title"], n["detail_text"])
         if intel:
             save_to_baserow(intel, n["url"], n["date"])
 
