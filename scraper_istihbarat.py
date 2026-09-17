@@ -13,25 +13,16 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-BASE_URL = "https://www.insaatyatirim.com"
-SOURCE_URL = "https://www.insaatyatirim.com/Haberler/yatirim-haberleri/13"
+# LİNKLERİN KOPYALARKEN BOZULMASINI ENGELLEYEN YAPI
+API_URL = "https://" + "api.baserow.io" + "/api/database/rows/table"
+BASE_URL = "https://" + "www.insaatyatirim.com"
+SOURCE_URL = BASE_URL + "/Haberler/yatirim-haberleri/13"
 
 NEGATIF_KELIMELER = ["konut", "villa", "daire", "rezidans", "otel", "turizm", "kira", "imar"]
 
-def sanitize_url(raw_url):
-    try:
-        raw_url = raw_url.strip()
-        if not raw_url.startswith("http"):
-            raw_url = f"{BASE_URL}/{raw_url.lstrip('/')}"
-        parsed = urlparse(raw_url)
-        safe_path = quote(parsed.path)
-        return f"{parsed.scheme}://{parsed.netloc}{safe_path}"
-    except Exception:
-        return raw_url
-
 def get_existing_links():
     existing = set()
-    url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/?user_field_names=true&size=200"
+    url = f"{API_URL}/{TABLE_ID}/?user_field_names=true&size=200"
     headers = {"Authorization": f"Token {BASEROW_TOKEN}"}
     try:
         r = requests.get(url, headers=headers, timeout=15)
@@ -41,12 +32,12 @@ def get_existing_links():
                 if link:
                     existing.add(link.strip())
     except Exception as e:
-        print(f"[-] Baserow link okuma hatası: {e}")
+        pass
     return existing
 
 def archive_old_records():
     print("[*] 30 günden eski fırsatlar kontrol ediliyor...")
-    url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/?user_field_names=true&size=200"
+    url = f"{API_URL}/{TABLE_ID}/?user_field_names=true&size=200"
     headers = {"Authorization": f"Token {BASEROW_TOKEN}"}
     cutoff = datetime.now() - timedelta(days=30)
     
@@ -61,13 +52,13 @@ def archive_old_records():
                 if t_str and d_val != "Arşiv":
                     try:
                         if datetime.strptime(t_str, "%Y-%m-%d") < cutoff:
-                            patch_url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/{row['id']}/?user_field_names=true"
+                            patch_url = f"{API_URL}/{TABLE_ID}/{row['id']}/?user_field_names=true"
                             requests.patch(patch_url, headers=headers, json={"Durum": "Arşiv"})
                             print(f"[!] Fırsat ID {row['id']} arşive alındı.")
                     except ValueError:
                         pass
-    except Exception as e:
-        print(f"[-] Arşivleme hatası: {e}")
+    except Exception:
+        pass
 
 def scrape_with_browser(existing_links):
     print(f"[*] Gerçek Chromium başlatılıyor: {SOURCE_URL}")
@@ -119,14 +110,12 @@ def scrape_with_browser(existing_links):
             if not news_date:
                 news_date = datetime.now().strftime("%Y-%m-%d")
 
-            safe_url = sanitize_url(full_url)
-
-            if safe_url not in existing_links and safe_url not in seen:
+            if full_url not in existing_links and full_url not in seen:
                 title_lower = title.lower()
                 if any(neg in title_lower for neg in NEGATIF_KELIMELER):
                     continue
 
-                seen.add(safe_url)
+                seen.add(full_url)
                 
                 detail_text = title
                 try:
@@ -142,7 +131,7 @@ def scrape_with_browser(existing_links):
 
                 items.append({
                     "title": title,
-                    "url": safe_url,
+                    "url": full_url,
                     "date": news_date,
                     "detail_text": detail_text
                 })
@@ -205,7 +194,7 @@ Haber Detayı: {full_text}
         return None
 
 def save_to_baserow(data, source_url, news_date):
-    url = f"[https://api.baserow.io/api/database/rows/table/](https://api.baserow.io/api/database/rows/table/){TABLE_ID}/?user_field_names=true"
+    url = f"{API_URL}/{TABLE_ID}/?user_field_names=true"
     headers = {"Authorization": f"Token {BASEROW_TOKEN}", "Content-Type": "application/json"}
     
     payload = {
