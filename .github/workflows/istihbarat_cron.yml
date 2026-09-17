@@ -1,0 +1,27 @@
+name: Sektorel Istihbarat Scraper
+
+on:
+  schedule:
+    - cron: '0 6 * * *' # Her sabah TR saatiyle 09:00'da çalışır
+  workflow_dispatch: # İstediğin zaman panelden elle çalıştırma butonu
+
+jobs:
+  run-scraper:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kodu Cek
+        uses: actions/checkout@v4
+
+      - name: Python Kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Kutuphaneleri Yukle
+        run: pip install requests beautifulsoup4
+
+      - name: Botu Calistir
+        env:
+          BASEROW_TOKEN: ${{ secrets.BASEROW_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python scraper_istihbarat.py
