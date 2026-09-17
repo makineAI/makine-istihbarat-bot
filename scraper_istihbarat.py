@@ -10,7 +10,6 @@ BASEROW_TOKEN = os.getenv("BASEROW_TOKEN", "").strip()
 TABLE_ID = "1197631"  # mai_istihbarat
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-# Gemini istemcisini başlat
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
 BASE_URL = "https://www.insaatyatirim.com"
@@ -92,7 +91,7 @@ def scrape_with_browser(existing_links):
             if not a_tag:
                 continue
 
-            href = a_tag["href"]
+            href = a_tag["href"].strip()
             full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
             title = a_tag.get_text(strip=True)
 
@@ -148,20 +147,22 @@ Aşağıdaki haberi incele. Bu haber DOĞRUDAN aşağıdaki iki sektörden birin
 1. İŞ MAKİNESİ: Ağır sanayi, altyapı, maden, büyük fabrika kaba inşaatı, hafriyat, liman vb.
 2. İSTİF MAKİNESİ: Lojistik depo, antrepo, fabrika içi üretim tesisi, soğuk hava deposu, dağıtım merkezi vb.
 
-EĞER bu iki sektörle HİÇBİR İLGİSİ YOKSA (örneğin sadece konut, arsa, daire, mevzuat, bürokratik atama vb. ise):
+EĞER bu iki sektörle HİÇBİR İLGİSİ YOKSA:
 SADECE "ILGISIZ" yaz.
 
 EĞER UYGUNSA:
 SADECE aşağıdaki JSON formatında yanıt ver (Markdown tırnakları ```json KULLANMA):
 {{
-  "İstihbarat_Basligi": "Net, profesyonel başlık (Örn: X Kimya Gebze Yeni Depo İnşası)",
+  "İstihbarat_Basligi": "Net, profesyonel başlık",
   "Hedef_Firma": "Yatırım yapan ana firma adı (Bulunamazsa 'Bilinmiyor')",
   "İstihbarat_Turu": "Yeni Yatırım / Tesis",
-  "İlgili_Sektor": "İstif makinesi VEYA İş makinesi (İkisinden birini tam bu yazımla seç)",
+  "İlgili_Sektor": "İstif Makinesi VEYA İş Makinesi",
   "Potansiyel_İhtiyac": "Düşük (1-2 Makine) VEYA Orta (3-10 Makine) VEYA Yüksek (10+ Makine)",
   "Sehir_Bolge": "İl / İlçe veya Bölge",
-  "İstihbarat_Detayı": "Tahmini makine modelleri (örn: 4 adet Reach Truck, 2 Transpalet) ve satış ekibi için kısa aksiyon tavsiyesi."
+  "İstihbarat_Detayı": "Tahmini makine modelleri ve satış ekibi için kısa aksiyon tavsiyesi."
 }}
+
+DİKKAT: İlgili_Sektor alanı için SADECE 'İş Makinesi' veya 'İstif Makinesi' yaz (baş harfleri büyük).
 
 Haber Başlığı: {title}
 Haber Detayı: {full_text}
@@ -180,7 +181,16 @@ Haber Detayı: {full_text}
         if raw.startswith("```"):
             raw = raw.strip("`").replace("json", "").strip()
             
-        return json.loads(raw)
+        data = json.loads(raw)
+
+        # Baserow Select seçenekleri için kesin formatlama düzeltmesi
+        sektor_raw = data.get("İlgili_Sektor", "").lower()
+        if "istif" in sektor_raw:
+            data["İlgili_Sektor"] = "İstif Makinesi"
+        else:
+            data["İlgili_Sektor"] = "İş Makinesi"
+
+        return data
     except Exception as e:
         print(f"[-] Analiz atlandı: {e}")
         return None
@@ -188,18 +198,25 @@ Haber Detayı: {full_text}
 def save_to_baserow(data, source_url, news_date):
     url = f"https://api.baserow.io/api/database/rows/table/{TABLE_ID}/?user_field_names=true"
     headers = {"Authorization": f"Token {BASEROW_TOKEN}", "Content-Type": "application/json"}
+    
+    # URL'in geçerli olduğundan emin ol
+    clean_url = source_url.strip()
+    if not clean_url.startswith("http"):
+        clean_url = f"{BASE_URL}/{clean_url.lstrip('/')}"
+
     payload = {
         "İstihbarat_Basligi": data.get("İstihbarat_Basligi"),
         "Hedef_Firma": data.get("Hedef_Firma"),
-        "İstihbarat_Turu": data.get("İstihbarat_Turu"),
+        "İstihbarat_Turu": data.get("İstihbarat_Turu", "Yeni Yatırım / Tesis"),
         "İlgili_Sektor": data.get("İlgili_Sektor"),
         "Potansiyel_İhtiyac": data.get("Potansiyel_İhtiyac"),
         "Sehir_Bolge": data.get("Sehir_Bolge"),
         "İstihbarat_Detayı": data.get("İstihbarat_Detayı"),
         "Tarih": news_date,
-        "Kaynak_Haber_Linki": source_url,
+        "Kaynak_Haber_Linki": clean_url,
         "Durum": "Aktif Fırsat"
     }
+    
     r = requests.post(url, headers=headers, json=payload)
     if r.status_code in [200, 201]:
         print(f"[✓] İstihbarat Baserow'a eklendi: {data.get('İstihbarat_Basligi')}")
