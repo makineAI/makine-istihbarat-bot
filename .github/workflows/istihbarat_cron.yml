@@ -17,8 +17,10 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Kutuphaneleri Yukle
-        run: pip install requests beautifulsoup4 cloudscraper
+      - name: Paketleri ve Chromium Kur
+        run: |
+          pip install requests beautifulsoup4 playwright
+          playwright install --with-deps chromium
 
       - name: Botu Calistir
         env:
