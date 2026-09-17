@@ -8,7 +8,7 @@ from playwright.sync_api import sync_playwright
 from google import genai
 
 BASEROW_TOKEN = os.getenv("BASEROW_TOKEN", "").strip()
-TABLE_ID = "1197631"  # mai_istihbarat
+TABLE_ID = "1197631"
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
@@ -19,7 +19,6 @@ SOURCE_URL = "https://www.insaatyatirim.com/Haberler/yatirim-haberleri/13"
 NEGATIF_KELIMELER = ["konut", "villa", "daire", "rezidans", "otel", "turizm", "kira", "imar"]
 
 def sanitize_url(raw_url):
-    """URL içindeki Türkçe karakterleri encode ederek Baserow validasyonunu garantiye alır."""
     try:
         raw_url = raw_url.strip()
         if not raw_url.startswith("http"):
@@ -120,7 +119,6 @@ def scrape_with_browser(existing_links):
             if not news_date:
                 news_date = datetime.now().strftime("%Y-%m-%d")
 
-            # sanitize_url ile Baserow'daki kayıtlı linklerle tam örtüşmesini sağla
             safe_url = sanitize_url(full_url)
 
             if safe_url not in existing_links and safe_url not in seen:
@@ -195,7 +193,6 @@ Haber Detayı: {full_text}
             
         data = json.loads(raw)
         
-        # Kesin kural: Sadece bu iki ifadeden biri gidecek
         sektor_metin = str(data.get("Sektor", "")).lower()
         if "istif" in sektor_metin:
             data["İlgili_Sektor"] = "İstif Makinesi"
@@ -224,11 +221,14 @@ def save_to_baserow(data, source_url, news_date):
         "Durum": "Aktif Fırsat"
     }
     
-    r = requests.post(url, headers=headers, json=payload)
-    if r.status_code in [200, 201]:
-        print(f"[✓] İstihbarat Baserow'a eklendi: {data.get('İstihbarat_Basligi')}")
-    else:
-        print(f"[-] Baserow kayıt hatası: {r.status_code} - {r.text}")
+    try:
+        r = requests.post(url, headers=headers, json=payload, timeout=15)
+        if r.status_code in [200, 201]:
+            print(f"[✓] İstihbarat Baserow'a eklendi: {data.get('İstihbarat_Basligi')}")
+        else:
+            print(f"[-] Baserow kayıt hatası: {r.status_code} - {r.text}")
+    except Exception as e:
+        print(f"[-] Kayıt gönderme hatası: {e}")
 
 def main():
     archive_old_records()
