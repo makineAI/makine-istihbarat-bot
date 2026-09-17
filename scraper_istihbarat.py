@@ -1,4 +1,4 @@
-import os
+# LİNKLERİN KOPYALARKEN BOZULMASINI ENGELLEYEN YAPIimport os
 import json
 import requests
 from urllib.parse import quote, urlparse
@@ -13,12 +13,22 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 ai_client = genai.Client(api_key=GEMINI_API_KEY)
 
-# LİNKLERİN KOPYALARKEN BOZULMASINI ENGELLEYEN YAPI
 API_URL = "https://" + "api.baserow.io" + "/api/database/rows/table"
 BASE_URL = "https://" + "www.insaatyatirim.com"
 SOURCE_URL = BASE_URL + "/Haberler/yatirim-haberleri/13"
 
 NEGATIF_KELIMELER = ["konut", "villa", "daire", "rezidans", "otel", "turizm", "kira", "imar"]
+
+def sanitize_url(raw_url):
+    try:
+        raw_url = raw_url.strip()
+        if not raw_url.startswith("http"):
+            raw_url = BASE_URL + "/" + raw_url.lstrip('/')
+        parsed = urlparse(raw_url)
+        safe_path = quote(parsed.path)
+        return parsed.scheme + "://" + parsed.netloc + safe_path
+    except Exception:
+        return raw_url
 
 def get_existing_links():
     existing = set()
@@ -49,12 +59,13 @@ def archive_old_records():
                 durum = row.get("Durum", {})
                 d_val = durum.get("value") if isinstance(durum, dict) else str(durum)
                 
-                if t_str and d_val != "Arşiv":
+                if t_str and d_val != "Sonuçlandı (Kapandı)":
                     try:
                         if datetime.strptime(t_str, "%Y-%m-%d") < cutoff:
                             patch_url = f"{API_URL}/{TABLE_ID}/{row['id']}/?user_field_names=true"
-                            requests.patch(patch_url, headers=headers, json={"Durum": "Arşiv"})
-                            print(f"[!] Fırsat ID {row['id']} arşive alındı.")
+                            # 30 günü geçenleri otomatik "Sonuçlandı (Kapandı)" durumuna al
+                            requests.patch(patch_url, headers=headers, json={"Durum": "Sonuçlandı (Kapandı)"})
+                            print(f"[!] Fırsat ID {row['id']} zaman aşımından kapatıldı.")
                     except ValueError:
                         pass
     except Exception:
@@ -95,7 +106,7 @@ def scrape_with_browser(existing_links):
                 continue
 
             href = a_tag["href"].strip()
-            full_url = href if href.startswith("http") else f"{BASE_URL}{href}"
+            full_url = href if href.startswith("http") else BASE_URL + href
             title = a_tag.get_text(strip=True)
 
             date_el = card.find("div", class_="meta-date")
@@ -197,6 +208,8 @@ def save_to_baserow(data, source_url, news_date):
     url = f"{API_URL}/{TABLE_ID}/?user_field_names=true"
     headers = {"Authorization": f"Token {BASEROW_TOKEN}", "Content-Type": "application/json"}
     
+    safe_url = sanitize_url(source_url)
+    
     payload = {
         "İstihbarat_Basligi": data.get("İstihbarat_Basligi"),
         "Hedef_Firma": data.get("Hedef_Firma"),
@@ -206,8 +219,8 @@ def save_to_baserow(data, source_url, news_date):
         "Sehir_Bolge": data.get("Sehir_Bolge"),
         "İstihbarat_Detayı": data.get("İstihbarat_Detayı"),
         "Tarih": news_date,
-        "Kaynak_Haber_Linki": source_url,
-        "Durum": "Aktif Fırsat"
+        "Kaynak_Haber_Linki": safe_url,
+        "Durum": "Aktif Fırsat (Sıcak)"
     }
     
     try:
